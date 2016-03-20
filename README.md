@@ -5,7 +5,7 @@ This is a fork of https://gitlab.com/FFP/ffp-apdb-client and https://gitlab.com/
 ## Access Points DataBase (APDB) for Freifunk (Cottbus)
 The APDB consists of two parts:
 - client side: `apdb-client` (https://github.com/FFCB/apdb-client)
-- server side: `apdb-server` (https://github.com/FFCB/ffp-apdb-server)
+- server side: `apdb-server` (https://github.com/FFCB/apdb-server)
 
 A productive used installation is available at http://status.freifunk-cottbus.de/
 
