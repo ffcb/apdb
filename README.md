@@ -1,4 +1,4 @@
-# apdb
+# APDB
 
 This is a fork of https://gitlab.com/FFP/ffp-apdb-client and https://gitlab.com/FFP/ffp-apdb-server.
 
