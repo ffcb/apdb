@@ -1,0 +1,179 @@
+#!/bin/sh /etc/rc.common
+# this version only works with OpenWrt Backfire and up (> r20728)!
+# /etc/init.d/ffcb-apdb enable
+
+# DEBUG?
+#set -x
+#logfile=/tmp/ffcb-apdb.log
+#exec > $logfile 2>&1
+
+SCRIPTNAME='ffcb-apdb'
+SCRIPTPATH='/etc/init.d/' # _with_ trailing / !
+UPDATEURL='http://status.freifunk-cottbus.de/ap.php'
+UPGRADEURL='http://status.freifunk-cottbus.de/ffcb-apdb.php'
+
+##### ----- do NOT edit from this line on ----- #####
+## init variables; https://wiki.openwrt.org/doc/techref/initscripts
+START=99
+EXTRA_COMMANDS="status update upgrade"
+
+## script variables
+SCRIPTVERSION='160320-1'
+SCRIPT=${SCRIPTPATH}${SCRIPTNAME}
+CRONTABPATH='/var/spool/cron/crontabs/' # _with_ trailing / !
+CRONTABUSER='root'
+CRONTAB=${CRONTABPATH}${CRONTABUSER}
+UPDATEINTERVAL=$(awk 'BEGIN{srand();print int(rand()*60)}') # run cron hourly at a random minute
+UPGRADEMINUTE=$(awk 'BEGIN{srand();print int(rand()*60)}') # random minute for upgrade cron
+UPGRADEHOUR=$(awk 'BEGIN{srand();print int(rand()*25)}') # random hour for upgrade cron
+UPGRADEDAY='1'
+
+## spript
+WIF=$(ifconfig | awk '/10\.22\.[0-9]{1,3}\.[0-9]{1,3}/ {print $1}' RS="\n\n" | grep -m 1 wlan) # http://stackoverflow.com/a/18344694/338049
+#WIF= uci show = wireless.@wifi-iface[0].ifname=wlan0-adhoc-2
+NEWWIF=$(ifconfig | awk '/10\.22\.(250|254|256)\.[0-9]{1,3}/ {print $1}' RS="\n\n" | grep -m 1 wlan)
+[ ! -z ${NEWWIF} ] && WIF=$NEWWIF
+
+HOSTNAME=$(uci show system|grep -i hostname|cut -d '=' -f2|sed 's/ /%20/g')
+IP=$(ifconfig ${WIF}|grep 'inet addr'|awk '{print $2}'| sed 's/addr://'|sed 's/ /%20/g')
+GWIP=$(ip route | awk '/default via/ {print $3}') # awk nicht installiert :(
+LATITUDE=$(uci show system|grep -i latitude|cut -d '=' -f2|sed 's/ /%20/g')
+LONGITUDE=$(uci show system|grep -i longitude|cut -d '=' -f2|sed 's/ /%20/g')
+GEOLOC="${LATITUDE};${LONGITUDE}"
+LOCATION=$(uci show system|grep -i location|cut -d '=' -f2|sed 's/ /%20/g')
+CONTACT=$(grep 'mail' /etc/config/freifunk|awk '{$1=$2="";print}'|sed 's/ /%20/g'|sed 's/#/%23/g')
+#CONTACT=$(uci show |grep -i 'freifunk.contact.mail' |cut -d '=' -f2|sed 's/ /%20/g')
+UPTIME=$(cat /proc/uptime|cut -d ' ' -f2|sed 's/ /%20/g')
+FIRMWARE=$(cat /etc/openwrt_version|sed 's/ /%20/g')
+#FIRMWARE=$(uci show system|grep -i version|cut -d '=' -f2|sed 's/ /%20/g')
+MACHINE=$(grep 'machine' /proc/cpuinfo|awk '{$1=$2=""; print}'| sed 's/\ \ //'|sed 's/ /%20/g')
+SYSTEMTYPE=$(grep 'system type' /proc/cpuinfo|awk '{$1=$2=""; print}'| sed 's/  : //'|sed 's/ /%20/g')
+#CLIENTS=$(iw dev ${WIF} station dump|grep -c Station)
+#CLIENTS=$(cat /tmp/dhcp.leases|wc -l)
+
+start() {
+    # INFO: enable init script AND add update cron job
+    if [ ! -f "/etc/rc.d/S${START}${SCRIPTNAME}" ]; then
+        enable
+        logger -t ${SCRIPTNAME} "init scrip enabled (${SCRIPT} start)"
+    fi
+    if ! $(grep -q ${SCRIPT} ${CRONTAB}); then
+        CRONJOB="${UPDATEINTERVAL} * * * * ${SCRIPT} update # FreiFunkCottbus-AccessPointsDataBase (v${SCRIPTVERSION})"
+        echo "${CRONJOB}" >> ${CRONTAB}
+        echo "${CRONTABUSER}" > ${CRONTABPATH}cron.update # reload crontab
+        logger -t ${SCRIPTNAME} "update cron job (every ${UPDATEINTERVAL}th minute past every hour) for user ${CRONTABUSER} added (${SCRIPT} start)"
+        update
+    fi
+}
+
+stop() {
+    # INFO: remove update cron job AND disable init script
+    if $(grep -q ${SCRIPT} ${CRONTAB}) ;then
+        # better grep than sed with unescaped file pathes ... -> http://stackoverflow.com/a/5413132/338049
+        grep -v ${SCRIPT} ${CRONTAB} > /tmp/crontab.temp && mv /tmp/crontab.temp ${CRONTAB} && chmod 600 ${CRONTAB}
+        echo "root" > /var/spool/cron/crontabs/cron.update # reload crontab
+        logger -t ${SCRIPTNAME} "cron job removed (${SCRIPT} stop)"
+    fi
+    if [ -f "/etc/rc.d/S${START}${SCRIPTNAME}" ]; then
+        disable
+        logger -t ${SCRIPTNAME} "init scrip disabled (${SCRIPT} stop)" 
+    fi
+}
+
+update() {
+    # INFO: updates own status to remote database
+    # only one instance should be running at time
+    # if exists an other one kill them and all wgets
+    PID_FILE="/tmp/run/${SCRIPTNAME}.pid"
+    if [ -f ${PID_FILE} ]; then
+        PID="$(cat ${PID_FILE} 2> /dev/null)"
+        if [ ! -z ${PID} ]; then
+            kill ${PID} >/dev/null 2> /dev/null
+        fi
+    fi
+
+    # get rid of wget-s hanging arround
+    for f in /proc/[0-9]*/cmdline; do
+        if $(grep -sq 'ap.php' "${f}"); then
+            WGET_PID="${f#/proc/}";
+            WGET_PID="${WGET_PID%%/*}"
+            kill "${WGET_PID}" 2>/dev/null
+        fi
+    done
+
+    echo "$$" > $PID_FILE
+
+    KEY=$(wget -q -O - ${UPDATEURL}?mode=get)
+    PARAM="&key=${KEY}&ip=%22${IP}%22&host=%22${HOSTNAME}%22&geoloc=%22${GEOLOC}%22&location=%22${LOCATION}%22&contact=%22${CONTACT}%22&gw_ip=%22${GWIP}%22&uptime=%22${UPTIME}%22&machine=%22${MACHINE}%22&systemtype=%22${SYSTEMTYPE}%22&scriptversion=%22${SCRIPTVERSION}%22&firmware=%22${FIRMWARE}%22"
+    wget -q -O - ${UPDATEURL}?mode=put"${PARAM}"
+    #echo ${URL}?mode=put"${PARAM}"
+    logger -t ${SCRIPTNAME} "AP information transfered to AP database (${SCRIPT} update)"
+
+    # everything looks fine
+    rm $PID_FILE
+}
+
+upgrade() {
+    # INFO: self-upgrade of this script
+    NEWSCRIPT="/tmp/${SCRIPTNAME}"
+
+    wget -q -O ${NEWSCRIPT} ${UPGRADEURL} 2>/dev/null
+
+    if [ -f ${NEWSCRIPT} ]; then
+        # remove current script
+        stop
+        # install new script
+        chmod +x ${NEWSCRIPT}
+        mv ${NEWSCRIPT} ${SCRIPT}
+
+        VERSION=$(grep 'SCRIPTVERSION=' ${SCRIPT} -m 1 | cut -f2 -d'='|sed 's/ /%20/g'|sed "s/'//g")
+        SUCCESS="version (${VERSION}) installed at ${SCRIPT} (${SCRIPT} upgrade)"
+        echo ${SUCCESS}
+        logger -t ${SCRIPTNAME} ${SUCCESS}
+
+        exec ${SCRIPT} start && exit
+    else
+        ERROR="download wasn't successful, so current version remains at ${SCRIPT} (${SCRIPT} upgrade)"
+        echo ${ERROR}
+        logger -t ${SCRIPTNAME} ${ERROR}
+    fi
+}
+
+status() {
+    echo "NOT IMPLEMENTED ! check status of the Freifunk Cottbus AP database"
+#   echo ""
+#   IFS=\;\,\:
+#   set - $(nvram get ff_adm_latlon)
+#   unset IFS
+#   if [ -z "$1" ] || [ -z "$2" ]; then
+#       echo "ERROR no coordinates configured, ff_adm_latlon is empty"
+#   elif [ -z "$(nvram get ff_map_server)" ]; then
+#       echo "ERROR no map server configured, ff_map_server is empty"
+#   else
+#       echo "STATUS    everything fine: ff_map_server is $(nvram get ff_map_server), coords are $1, $2"
+#       COORDS_ON_SERVER="$1, $2"
+#       UPDATERUN=`wget "$(nvram get ff_map_server)?dumpdatabase" -qO - 2> /tmp/freifunkmap_status | cut -f3 | grep "${COORDS_ON_SERVER}" | wc -l`
+#       CONNERROR=`cat /tmp/freifunkmap_status`
+#       if [ ! -z "$CONNERROR" ]; then
+#           echo "ERROR could not connect map server: ${CONNERROR}"
+#       else
+#           if [ ${UPDATERUN} -eq 0 ]; then
+#               echo "STATUS    connection to map server seems to be ok, but no update run so far"
+#           elif [ ${UPDATERUN} -eq 1 ]; then
+#               echo "STATUS    connection to map server seems to be ok, and your node should be visible in the map"
+#           else
+#               echo "ERROR something unexpected happend, your node should be more then one time visible in the map??? But this can't be"
+#           fi
+#       fi
+#       rm /tmp/freifunkmap_status
+#   fi
+#
+#   CRONTABENTRY=$(grep -c "/etc/init.d/S70freifunkmap update" /var/spool/cron/crontabs/root)
+#   if [ $CRONTABENTRY -eq 0 ]; then
+#       echo "ERROR no crontab entry for freifunkmap found, the update with the server will not run, try /etc/init.d/S70freifunkmap start"
+#   elif [ $CRONTABENTRY -eq 1 ]; then
+#       echo "STATUS    everything fine: found one entry for freifunkmap in the crontab"
+#   else [ $CRONTABENTRY -gt 1 ]
+#       echo "WARN  found more then one entry for freifunkmap in crontab, but the update should work anyway"
+#   fi
+}
