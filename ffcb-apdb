@@ -29,9 +29,11 @@ UPGRADEHOUR=$(awk 'BEGIN{srand();print int(rand()*25)}') # random hour for upgra
 UPGRADEDAY='1'
 
 ## spript
-WIF=$(ifconfig | awk '/10\.22\.[0-9]{1,3}\.[0-9]{1,3}/ {print $1}' RS="\n\n" | grep -m 1 wlan) # http://stackoverflow.com/a/18344694/338049
-#WIF= uci show = wireless.@wifi-iface[0].ifname=wlan0-adhoc-2
-NEWWIF=$(ifconfig | awk '/10\.22\.(250|254|256)\.[0-9]{1,3}/ {print $1}' RS="\n\n" | grep -m 1 wlan)
+# WIF=$(ifconfig | awk '/10\.22\.[0-9]{1,3}\.[0-9]{1,3}/ {print $1}' RS="\n\n" | grep -m 1 wlan) # http://stackoverflow.com/a/18344694/338049
+# WIF= uci show = wireless.@wifi-iface[0].ifname=wlan0-adhoc-2
+WIF='br-dhcp'
+# NEWWIF=$(ifconfig | awk '/10\.22\.(250|254|256)\.[0-9]{1,3}/ {print $1}' RS="\n\n" | grep -m 1 wlan)
+NEWWIF='br-dhcp'
 [ ! -z ${NEWWIF} ] && WIF=$NEWWIF
 
 HOSTNAME=$(uci show system|grep -i hostname|cut -d '=' -f2|sed 's/ /%20/g')
